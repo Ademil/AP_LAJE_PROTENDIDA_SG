@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
@@ -776,12 +776,26 @@ const Engine = (() => {
     const dc=coefSis.d*(gqp*Math.pow(L,4))/EI;const dp=coefSis.d*(wPrest*Math.pow(L,4))/EI;
     return {EI,wPrest,deltaCargas:dc*1000,deltaProt:dp*1000,deltaTotal:(dc-dp)*1000};
   }
-  function eluFlexao({b_cm,d_cm,dp_cm,fcd,fyd,fpd,Md_kNm,As_cm2,Ap_cm2}){
+    function eluFlexao({b_cm,d_cm,dp_cm,fcd,fyd,fpd,Md_kNm,As_cm2,Ap_cm2}){
     const b_mm=b_cm*10,d_mm=d_cm*10,dp_mm=dp_cm*10,As_mm2=As_cm2*100,Ap_mm2=Ap_cm2*100;
-    const x_mm=(As_mm2*fyd+Ap_mm2*fpd)/(0.68*b_mm*fcd);
-    const MRd=(As_mm2*fyd*Math.max(d_mm-0.4*x_mm,0)+Ap_mm2*fpd*Math.max(dp_mm-0.4*x_mm,0))/1e6;
+    // Em seção protendida: Δσp (acréscimo de tensão na armadura ativa)
+    // A protensão já está aplicada — usa-se apenas a reserva plástica
+    // NBR 6118:2023 item 17.2.2 — para cabos aderentes, Δσp limitado a ~210 MPa (conservador)
+    const dSigma_p = 210; // MPa — acréscimo adicional desde o estado descomprimido
+    const T_ap = Ap_mm2 * dSigma_p;    // força adicional da armadura ativa
+    const x_mm = (As_mm2*fyd + T_ap)/(0.68*b_mm*fcd);
+    const MRd = (As_mm2*fyd*Math.max(d_mm-0.4*x_mm,0) + T_ap*Math.max(dp_mm-0.4*x_mm,0))/1e6;
     let As_req=0;
-    if (Md_kNm>0){let lo=0,hi=200;for (let i=0;i<80;i++){const mid=(lo+hi)/2,Asm=mid*100;const xm=(Asm*fyd+Ap_mm2*fpd)/(0.68*b_mm*fcd);const MRdm=(Asm*fyd*Math.max(d_mm-0.4*xm,0)+Ap_mm2*fpd*Math.max(dp_mm-0.4*xm,0))/1e6;if (MRdm<Md_kNm) lo=mid; else hi=mid;}As_req=(lo+hi)/2;}
+    if (Md_kNm>0){
+      let lo=0,hi=200;
+      for (let i=0;i<80;i++){
+        const mid=(lo+hi)/2,Asm=mid*100;
+        const xm=(Asm*fyd + T_ap)/(0.68*b_mm*fcd);
+        const MRdm=(Asm*fyd*Math.max(d_mm-0.4*xm,0) + T_ap*Math.max(dp_mm-0.4*xm,0))/1e6;
+        if (MRdm<Md_kNm) lo=mid; else hi=mid;
+      }
+      As_req=(lo+hi)/2;
+    }
     const util=MRd>0?Md_kNm/MRd:0;
     return {MRd,x_cm:x_mm/10,As_req,utilization:util,status:MRd>=Md_kNm?(util>0.95?'ATENÇÃO':'OK'):'NÃO ATENDE'};
   }
@@ -1386,10 +1400,12 @@ function renderCaboSection(R){
 
 function renderAncoragem(R){
   try {
-    const modoAuto = $('anc_auto').value === '1';
+        const modoAuto = $('anc_auto').value === '1';
     if (modoAuto){
-      $('anc_P0').value   = R.prot.P0.toFixed(2);
-      $('anc_Pinf').value = R.perdas.Pef.toFixed(2);
+      // Força POR PLACA = força total / (nº cabos × nº cordoalhas por cabo)
+      const nPlacas = Math.max(1, (R.inp.nCabos || 1) * (R.inp.nCord || 1));
+      $('anc_P0').value   = (R.prot.P0 / nPlacas).toFixed(2);
+      $('anc_Pinf').value = (R.perdas.Pef / nPlacas).toFixed(2);
       if (R.fckjInfo){ $('anc_fckj').value = R.fckjInfo.fckj.toFixed(2); }
     }
     $('anc_P0').readOnly   = modoAuto;
@@ -1416,7 +1432,8 @@ function renderAncoragem(R){
       <b>NBR 6118:2023 item 9.6.1.2 (divisão pela placa ampliada A'b):</b><br>
       • Em serviço: f<sub>cp</sub> = 0,6·f<sub>ck</sub>·√(A'<sub>b</sub>/A<sub>b</sub>) ≤ 1,25·f<sub>ck</sub> → ${num(pa.limServ,2)} MPa<br>
       • No ato: f<sub>cp</sub> = 0,8·f<sub>ckj</sub>·√(A'<sub>b</sub>/A<sub>b</sub> − 0,2) ≤ 1,25·f<sub>ckj</sub> → ${num(pa.limAto,2)} MPa<br><br>
-      <b>Forças usadas:</b> P<sub>0</sub> = <b>${num(P0,2)} kN</b> ${modoAuto?'(auto)':'(manual)'} · P<sub>∞</sub> = <b>${num(Pinf,2)} kN</b> ${modoAuto?'(auto)':'(manual)'}<br>
+            <b>Forças por placa</b> (P_total / nº placas = ${num(R.inp.nCabos*R.inp.nCord,0)}):<br>
+      P<sub>0</sub> = <b>${num(P0,2)} kN</b> ${modoAuto?'(auto)':'(manual)'} · P<sub>∞</sub> = <b>${num(Pinf,2)} kN</b> ${modoAuto?'(auto)':'(manual)'}<br>
       <b>fckj usado</b> = <b>${num(fckj,2)} MPa</b> ${modoAuto?'(auto da aba Materiais)':'(manual)'}<br><br>
       <b>Verificação (ato):</b> ${num(P0,1)} kN ÷ <b>A'b = ${num(pa.Abp_cm2,2)} cm²</b> × 10 = ${num(pa.fcp_ato_MPa,2)} MPa ${pa.okAto?'≤':'<b>NÃO ≤</b>'} ${num(pa.limAto,2)} → <b style="color:${pa.okAto?'#16a34a':'#dc2626'}">${pa.okAto?'OK':'NÃO ATENDE'}</b><br>
       <b>Verificação (serviço):</b> ${num(Pinf,1)} kN ÷ <b>A'b = ${num(pa.Abp_cm2,2)} cm²</b> × 10 = ${num(pa.fcp_serv_MPa,2)} MPa ${pa.okServ?'≤':'<b>NÃO ≤</b>'} ${num(pa.limServ,2)} → <b style="color:${pa.okServ?'#16a34a':'#dc2626'}">${pa.okServ?'OK':'NÃO ATENDE'}</b>`;
@@ -1556,7 +1573,9 @@ function renderELS(R){
       kpi('σ sup QP',num(R.tensQP.sigmaSup,2),'MPa',R.tensQP.sigmaSup>=-R.limCompQP?'OK':'NÃO ATENDE',`lim ${num(-R.limCompQP,2)}`),
       kpi('σ inf QP',num(R.tensQP.sigmaInf,2),'MPa',R.tensQP.sigmaInf>=-R.limCompQP?'OK':'NÃO ATENDE',`lim ${num(-R.limCompQP,2)}`),
       kpi('σ tração rara',num(maxTra,2),'MPa',maxTra<=R.limTração?'OK':'ATENÇÃO',`lim ${num(R.limTração,2)}`),
-      kpi('Flecha',num(R.fle.deltaTotal,2),'mm',Math.abs(R.fle.deltaTotal)<=R.flechaAdm?'OK':'NÃO ATENDE',`lim ${num(R.flechaAdm,1)}`)
+            kpi('Flecha/Contraflecha',num(R.fle.deltaTotal,2),'mm',
+          Math.abs(R.fle.deltaTotal)<=R.flechaAdm?'OK':'ATENÇÃO',
+          `${R.fle.deltaTotal<0?'(contraflecha)':'(flecha)'} · lim ${num(R.flechaAdm,1)} mm`)
     ].join('');
   } catch(e){ logErr('renderELS: '+e.message); }
 }
@@ -1715,7 +1734,7 @@ function renderDetalhamento(R){
     for (const it of legend){ctx.fillStyle=it.cor;ctx.fillRect(legX,legY-5,14,10);ctx.fillStyle='#334155';ctx.fillText(it.txt,legX+20,legY);legX+=20+ctx.measureText(it.txt).width+22;if (legX>W-220){legX=pad.l;legY+=16;}}
     const e_max_NBR=Math.min(6*R.inp.h,120);
     const okBand=s_cabo<=e_max_NBR;
-    $('detNote').innerHTML=`<b>Arm. inferior principal</b> — Ø${phiLong_mm} c/${s_inf.toFixed(1)} cm · s_calc=${R.s_inf_calc.toFixed(1)} cm<br><b>Arm. distribuição</b> — Ø6,3 c/${s_dist.toFixed(1)} cm<br><b>Arm. negativa apoios</b> — Ø${phiLong_mm} c/${s_neg.toFixed(1)} cm · faixa a+1,5h = ${band_cm.toFixed(1)} cm<br><b>Cabos</b> — ${R.inp.nCabos}/m · s=${s_cabo.toFixed(1)} cm · <b>${nBands}</b> cabos em Ly=${R.inp.Ly.toFixed(2)} m<br><br><b style="color:#d97706">📍 Faixa de influência:</b><br>b_inf = Ly/n = ${s_cabo.toFixed(1)} cm · Limite NBR min(6h;120) = ${e_max_NBR.toFixed(0)} cm → <b style="color:${okBand?'#16a34a':'#dc2626'}">${okBand?'OK':'NÃO ATENDE'}</b><br>Área de influência: <b>${(s_cabo*R.inp.Lx/100).toFixed(3)} m²</b> por cabo`;
+    $('detNote').innerHTML=`<b>Arm. inferior principal</b> — Ø${phiLong_mm} c/${s_inf.toFixed(1)} cm · s_calc=${R.s_inf_calc.toFixed(1)} cm<br><b>Arm. distribuição</b> — Ø6,3 c/${s_dist.toFixed(1)} cm<br><b>Arm. negativa apoios</b> — Ø${phiLong_mm} c/${s_neg.toFixed(1)} cm · faixa a+1,5h = ${band_cm.toFixed(1)} cm<br><b>Cabos</b> — ${R.inp.nCabos}/m · s=${s_cabo.toFixed(1)} cm · <b>${nBands}</b> cabos em Ly=${R.inp.Ly.toFixed(2)} m<br><br><b style="color:#d97706">📍 Faixa de influência:</b><br>b_inf = Ly/n = ${s_cabo.toFixed(1)} cm · Limite NBR min(6h;120) = ${e_max_NBR.toFixed(0)} cm → <b style="color:${okBand?'#16a34a':'#dc2626'}">${okBand?'OK':'NÃO ATENDE'}</b><br>      Área de influência: <b>${(s_cabo*R.inp.Lx/100).toFixed(3).replace('.',',')} m²</b> por cabo`;
   } catch(e){ logErr('renderDetalhamento: '+e.message); }
 }
 function renderResumo(R){
